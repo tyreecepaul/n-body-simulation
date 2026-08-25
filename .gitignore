@@ -1,9 +1,3 @@
 __pycache__/
 build/
 sim_output/
-
-main_slurm.sh
-queue.sh
-run.sh
-times.sh
-sim
