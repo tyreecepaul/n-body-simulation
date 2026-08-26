@@ -22,27 +22,37 @@ void NaiveSimulation::step() {
 
 void NaiveSimulation::attract() {
   // Direct O(N^2) pairwise summation: for every body, sum the
-  // gravitational contribution of every other body individually.
-  // No spatial structure, no approximation — this is the ground-truth
-  // reference that Barnes-Hut is checked against, and the baseline that
-  // its O(N log N) tree walk is compared to for performance.
+  // gravitational contribution of every other body individually
+
   const std::size_t n = bodies.size();
+
+  // Outer loop: compute total acceleration for one body at a time.
   for (std::size_t i = 0; i < n; ++i) {
-    Vec2 acc(0.0f, 0.0f);
-    const Vec2 pos_i = bodies[i].pos;
+    Vec2 acc(0.0f, 0.0f);                 // accumulator for body i's net acceleration
+    const Vec2 pos_i = bodies[i].pos;     // cached so we don't re-read it every iteration
 
+    // Inner loop: visit every OTHER body and sum its contribution.
+    // This is what makes the algorithm O(N) per body, O(N^2) overall.
     for (std::size_t j = 0; j < n; ++j) {
-      if (i == j) continue;
+      if (i == j) continue;               // a body doesn't attract itself
 
-      Vec2 d = bodies[j].pos - pos_i;
-      float dSq = d.magSq();
+      Vec2 d = bodies[j].pos - pos_i;     // vector from body i to body j
+      float dSq = d.magSq();              // squared distance between the two bodies
+
+      // Softened inverse-square law: eSq prevents forces blowing up
+      // (dividing by ~0) when two bodies get very close together.
       float invSoft = 1.0f / (dSq + eSq);
       float invDist = 1.0f / std::sqrt(dSq + eSq);
 
+      // Newtonian gravity scaled by body j's mass; direction is
+      // implicitly encoded in vector d, magnitude in factor.
       float factor = bodies[j].mass * invDist * invSoft;
-      acc += d * factor;
+      acc += d * factor; // accumulate this pair's contribution
     }
 
+    // Store the fully-summed acceleration once all N-1 contributions
+    // have been added, avoids repeatedly writing to bodies[i] inside
+    // the inner loop.
     bodies[i].acc = acc;
   }
 }
