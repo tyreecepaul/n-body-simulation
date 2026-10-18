@@ -17,7 +17,4 @@ public:
   void attract();
   void iterate();
   void collide();
-
-private:
-  void resolve(int i, int j);
 };

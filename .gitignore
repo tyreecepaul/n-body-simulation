@@ -3,3 +3,4 @@ build/
 sim_output/
 .vscode/
 .venv/
+CLAUDE.md

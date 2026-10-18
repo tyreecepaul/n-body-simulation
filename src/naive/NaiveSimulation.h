@@ -22,7 +22,5 @@ public:
   void collide();
 
 private:
-  void resolve(int i, int j);
-
   float eSq; // softening epsilon squared, matches QuadTree's default (epsilon=1.0f)
 };
