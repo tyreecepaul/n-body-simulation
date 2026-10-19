@@ -28,14 +28,24 @@ void Simulation::attract() {
   // Body::id and Main.cpp's per-frame sort for why that matters for
   // trajectory output.
   quadtree.build(bodies);
-  for (Body &body : bodies) {
-    body.acc = quadtree.acceleration(body.pos, bodies);
+
+  // Each body only reads the (const) tree and writes its own acc, so the
+  // loop is race-free and bit-identical to serial at any thread count.
+  // Dynamic schedule because bodies near the dense centre open far more
+  // nodes; build() leaves bodies spatially ordered, so a chunk of
+  // consecutive bodies walks a similar part of the tree.
+  const std::size_t n = bodies.size();
+#pragma omp parallel for schedule(dynamic, 128)
+  for (std::size_t i = 0; i < n; ++i) {
+    bodies[i].acc = quadtree.acceleration(bodies[i].pos, bodies);
   }
 }
 
 void Simulation::iterate() {
-  for (Body &body : bodies) {
-    body.update(dt);
+  const std::size_t n = bodies.size();
+#pragma omp parallel for schedule(static)
+  for (std::size_t i = 0; i < n; ++i) {
+    bodies[i].update(dt);
   }
 }
 

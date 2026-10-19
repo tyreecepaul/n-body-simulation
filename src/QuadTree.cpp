@@ -33,11 +33,15 @@ Quad Quad::newContaining(const std::vector<Body> &bodies) {
   float maxX = std::numeric_limits<float>::lowest();
   float maxY = std::numeric_limits<float>::lowest();
 
-  for (const Body &body : bodies) {
-    minX = std::min(minX, body.pos.x);
-    minY = std::min(minY, body.pos.y);
-    maxX = std::max(maxX, body.pos.x);
-    maxY = std::max(maxY, body.pos.y);
+  // min/max are exact, so the reduction is identical at any thread count.
+  const std::size_t n = bodies.size();
+#pragma omp parallel for schedule(static) \
+    reduction(min : minX, minY) reduction(max : maxX, maxY)
+  for (std::size_t i = 0; i < n; ++i) {
+    minX = std::min(minX, bodies[i].pos.x);
+    minY = std::min(minY, bodies[i].pos.y);
+    maxX = std::max(maxX, bodies[i].pos.x);
+    maxY = std::max(maxY, bodies[i].pos.y);
   }
 
   Vec2 center = Vec2(minX + maxX, minY + maxY) * 0.5f;
@@ -48,7 +52,7 @@ Quad Quad::newContaining(const std::vector<Body> &bodies) {
 
 // ---------------- QuadTree ----------------
 
-void QuadTree::subdivide(int node, std::vector<Body> &bodies,
+void QuadTree::subdivide(int node, int children, std::vector<Body> &bodies,
                          std::size_t start, std::size_t end) {
     const Quad &parentQuad = nodes[node].quad;
     const Vec2 center = parentQuad.center;
@@ -73,9 +77,6 @@ void QuadTree::subdivide(int node, std::vector<Body> &bodies,
             return b.pos.x < center.x;
         });
 
-    parents.push_back(node);
-
-    const int children = static_cast<int>(nodes.size());
     nodes[node].children = children;
 
     Quad quads[4];
@@ -83,29 +84,71 @@ void QuadTree::subdivide(int node, std::vector<Body> &bodies,
 
     const int next = nodes[node].next;
 
-    nodes.emplace_back(
-        children + 1,
-        quads[0],
-        start,
-        leftBottom);
+    nodes[children]     = Node(children + 1, quads[0], start, leftBottom);
+    nodes[children + 1] = Node(children + 2, quads[1], leftBottom, mid);
+    nodes[children + 2] = Node(children + 3, quads[2], mid, rightTop);
+    nodes[children + 3] = Node(next, quads[3], rightTop, end);
+}
 
-    nodes.emplace_back(
-        children + 2,
-        quads[1],
-        leftBottom,
-        mid);
+void QuadTree::accumulateLeaf(int node, const std::vector<Body> &bodies) {
+    const std::size_t s = nodes[node].bodyStart;
+    const std::size_t e = nodes[node].bodyEnd;
 
-    nodes.emplace_back(
-        children + 3,
-        quads[2],
-        mid,
-        rightTop);
+    // Independent accumulators reduce the dependency chain
+    // in pos += ... and mass += ...
+    Vec2 pos0(0.0f, 0.0f);
+    Vec2 pos1(0.0f, 0.0f);
+    Vec2 pos2(0.0f, 0.0f);
+    Vec2 pos3(0.0f, 0.0f);
 
-    nodes.emplace_back(
-        next,
-        quads[3],
-        rightTop,
-        end);
+    float mass0 = 0.0f;
+    float mass1 = 0.0f;
+    float mass2 = 0.0f;
+    float mass3 = 0.0f;
+
+    std::size_t i = s;
+
+    // Four-way loop unrolling.
+    for (; i + 3 < e; i += 4) {
+        const Body &b0 = bodies[i];
+        const Body &b1 = bodies[i + 1];
+        const Body &b2 = bodies[i + 2];
+        const Body &b3 = bodies[i + 3];
+
+        pos0 += b0.pos * b0.mass;
+        mass0 += b0.mass;
+
+        pos1 += b1.pos * b1.mass;
+        mass1 += b1.mass;
+
+        pos2 += b2.pos * b2.mass;
+        mass2 += b2.mass;
+
+        pos3 += b3.pos * b3.mass;
+        mass3 += b3.mass;
+    }
+
+    // Handle remaining 0–3 bodies.
+    for (; i < e; ++i) {
+        const Body &b = bodies[i];
+
+        pos0 += b.pos * b.mass;
+        mass0 += b.mass;
+    }
+
+    // Combine independent accumulators once.
+    nodes[node].pos = pos0 + pos1 + pos2 + pos3;
+    nodes[node].mass = mass0 + mass1 + mass2 + mass3;
+}
+
+void QuadTree::processNode(int node, int children,
+                           std::vector<Body> &bodies) {
+    if (children != 0) {
+        subdivide(node, children, bodies,
+                  nodes[node].bodyStart, nodes[node].bodyEnd);
+    } else {
+        accumulateLeaf(node, bodies);
+    }
 }
 
 void QuadTree::build(std::vector<Body> &bodies) {
@@ -115,63 +158,77 @@ void QuadTree::build(std::vector<Body> &bodies) {
     Quad quad = Quad::newContaining(bodies);
     nodes.emplace_back(0, quad, 0, bodies.size());
 
-    std::size_t node = 0;
+    // Level-synchronous breadth-first build. Serially, a breadth-first
+    // build appends each subdividing node's 4 children in node order, so
+    // the children of level [levelBegin, levelEnd) land at levelEnd + 4*k,
+    // where k is the node's rank among that level's subdividing nodes.
+    // Precomputing those slots lets a whole level be processed in
+    // parallel (each node partitions its own disjoint body range) while
+    // producing exactly the serial node layout and parents order.
+    //
+    // One parallel region spans all levels, so each level costs barriers
+    // rather than a thread fork/join (which dominates for small trees).
+    std::size_t levelBegin = 0;
+    std::size_t levelEnd = 0;
+    std::ptrdiff_t levelSize = 0;
+    std::ptrdiff_t chunk = 1;
 
-    while (node < nodes.size()) {
-        std::size_t s = nodes[node].bodyStart;
-        std::size_t e = nodes[node].bodyEnd;
+#pragma omp parallel
+    {
+        while (true) {
+            // The calling thread does the level bookkeeping, and also the
+            // root level itself: one node gives nothing to share, and on
+            // hybrid CPUs a dynamic schedule might hand it to a slow core.
+#if _OPENMP >= 202011
+#pragma omp masked
+#else
+#pragma omp master
+#endif
+            {
+                levelBegin = levelEnd;
+                levelEnd = nodes.size();
+                levelSize = static_cast<std::ptrdiff_t>(levelEnd - levelBegin);
 
-        if (e - s > leafCapacity) {
-            subdivide(node, bodies, s, e);
-        } else {
-            // Independent accumulators reduce the dependency chain
-            // in pos += ... and mass += ...
-            Vec2 pos0(0.0f, 0.0f);
-            Vec2 pos1(0.0f, 0.0f);
-            Vec2 pos2(0.0f, 0.0f);
-            Vec2 pos3(0.0f, 0.0f);
+                childSlot.resize(levelSize);
+                int children = static_cast<int>(levelEnd);
+                for (std::size_t node = levelBegin; node < levelEnd; ++node) {
+                    const Node &n = nodes[node];
+                    if (n.bodyEnd - n.bodyStart > leafCapacity) {
+                        parents.push_back(static_cast<int>(node));
+                        childSlot[node - levelBegin] = children;
+                        children += 4;
+                    } else {
+                        childSlot[node - levelBegin] = 0;
+                    }
+                }
+                nodes.resize(children);
 
-            float mass0 = 0.0f;
-            float mass1 = 0.0f;
-            float mass2 = 0.0f;
-            float mass3 = 0.0f;
-
-            std::size_t i = s;
-
-            // Four-way loop unrolling.
-            for (; i + 3 < e; i += 4) {
-                const Body &b0 = bodies[i];
-                const Body &b1 = bodies[i + 1];
-                const Body &b2 = bodies[i + 2];
-                const Body &b3 = bodies[i + 3];
-
-                pos0 += b0.pos * b0.mass;
-                mass0 += b0.mass;
-
-                pos1 += b1.pos * b1.mass;
-                mass1 += b1.mass;
-
-                pos2 += b2.pos * b2.mass;
-                mass2 += b2.mass;
-
-                pos3 += b3.pos * b3.mass;
-                mass3 += b3.mass;
+                // Top levels have a handful of nodes, each partitioning a
+                // large body range, so they need chunk size 1; deep levels
+                // have thousands of small nodes, where larger chunks avoid
+                // scheduling contention and false sharing on adjacent Nodes.
+                chunk = std::max<std::ptrdiff_t>(1, levelSize / 256);
+                if (levelSize == 1) {
+                    processNode(static_cast<int>(levelBegin), childSlot[0],
+                                bodies);
+                }
             }
+#pragma omp barrier
 
-            // Handle remaining 0–3 bodies.
-            for (; i < e; ++i) {
-                const Body &b = bodies[i];
-
-                pos0 += b.pos * b.mass;
-                mass0 += b.mass;
+            if (levelSize == 0) {
+                break;
             }
-
-            // Combine independent accumulators once.
-            nodes[node].pos = pos0 + pos1 + pos2 + pos3;
-            nodes[node].mass = mass0 + mass1 + mass2 + mass3;
+            if (levelSize > 1) {
+#pragma omp for schedule(dynamic, chunk) nowait
+                for (std::ptrdiff_t k = 0; k < levelSize; ++k) {
+                    processNode(static_cast<int>(levelBegin + k), childSlot[k],
+                                bodies);
+                }
+            }
+            // Everyone must be done with this level (and have read
+            // levelSize) before the next level's bookkeeping starts.
+#pragma omp barrier
         }
-
-        ++node;
     }
 
     propagate();

@@ -21,6 +21,11 @@ void NaiveSimulation::attract() {
   const std::size_t n = bodies.size();
 
   // Outer loop: compute total acceleration for one body at a time.
+  // Iterations are independent (each writes only bodies[i].acc), so they
+  // run in parallel. Work per body is uniform, but dynamic still helps on
+  // cores of unequal speed (e.g. hybrid P/E-core CPUs); chunks are large
+  // enough that scheduling overhead is negligible.
+#pragma omp parallel for schedule(dynamic, 16)
   for (std::size_t i = 0; i < n; ++i) {
     Vec2 acc(0.0f, 0.0f);                 // accumulator for body i's net acceleration
     const Vec2 pos_i = bodies[i].pos;     // cached so we don't re-read it every iteration
@@ -52,8 +57,10 @@ void NaiveSimulation::attract() {
 }
 
 void NaiveSimulation::iterate() {
-  for (Body &body : bodies) {
-    body.update(dt);
+  const std::size_t n = bodies.size();
+#pragma omp parallel for schedule(static)
+  for (std::size_t i = 0; i < n; ++i) {
+    bodies[i].update(dt);
   }
 }
 

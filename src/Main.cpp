@@ -44,9 +44,16 @@
 // Total size = 28 + n_bodies * 8 + num_frames * n_bodies * 4 * 4 bytes.
 
 namespace {
-void sortById(std::vector<Body> &bodies) {
-  std::sort(bodies.begin(), bodies.end(),
-            [](const Body &a, const Body &b) { return a.id < b.id; });
+// Restores id order (index i holds Body::id == i). uniformDisc() assigns
+// ids exactly 0..n-1, so this is an O(n) parallel scatter instead of a
+// sort, with the same result as sorting by id.
+void sortById(std::vector<Body> &bodies, std::vector<Body> &scratch) {
+  scratch = bodies;
+  const std::size_t n = bodies.size();
+#pragma omp parallel for schedule(static)
+  for (std::size_t i = 0; i < n; ++i) {
+    bodies[scratch[i].id] = scratch[i];
+  }
 }
 } // namespace
 
@@ -97,7 +104,8 @@ int main(int argc, char **argv) {
   // uniformDisc() sorts bodies by radius from center before returning, so
   // even frame 0's array order isn't id order — sort before this first
   // write too, or the mass/radius arrays wouldn't line up with id 0..n-1.
-  sortById(sim.bodies);
+  std::vector<Body> sortScratch;
+  sortById(sim.bodies, sortScratch);
 
   // mass and radius never change after construction (collide()/iterate()
   // only touch pos/vel/acc), so write them once instead of every frame.
@@ -108,11 +116,21 @@ int main(int argc, char **argv) {
     out.write(reinterpret_cast<const char *>(&body.radius), sizeof(float));
   }
 
+  // Fill the whole frame in parallel, then write it with one call instead
+  // of one small write per body.
+  std::vector<float> frameBuffer(static_cast<std::size_t>(nBodies) * 4);
   auto writeFrame = [&]() {
-    for (const Body &body : sim.bodies) {
-      float record[4] = {body.pos.x, body.pos.y, body.vel.x, body.vel.y};
-      out.write(reinterpret_cast<const char *>(record), sizeof(record));
+#pragma omp parallel for schedule(static)
+    for (std::size_t i = 0; i < nBodies; ++i) {
+      const Body &body = sim.bodies[i];
+      float *record = &frameBuffer[i * 4];
+      record[0] = body.pos.x;
+      record[1] = body.pos.y;
+      record[2] = body.vel.x;
+      record[3] = body.vel.y;
     }
+    out.write(reinterpret_cast<const char *>(frameBuffer.data()),
+              static_cast<std::streamsize>(frameBuffer.size() * sizeof(float)));
   };
 
   auto markFrameComplete = [&]() {
@@ -130,7 +148,7 @@ int main(int argc, char **argv) {
   for (std::uint32_t step = 1; step <= totalSteps; ++step) {
     sim.step(); // attract() -> quadtree.build() reorders sim.bodies
     if (step % outputEvery == 0) {
-      sortById(sim.bodies); // restore id order before this frame's write
+      sortById(sim.bodies, sortScratch); // restore id order before this frame's write
       writeFrame();
       markFrameComplete();
     }
