@@ -15,8 +15,8 @@ if ! [[ "$N" =~ ^[1-9][0-9]*$ ]]; then
 fi
 
 for ((i=1; i<=N; i++)); do
-    echo "Submitting naive run $i/$N..."
-    sbatch main_slurm_naive.sh
+    echo "Submitting run $i/$N..."
+    sbatch main_slurm.sh
 done
 
-echo "Submitted $N naive jobs."
+echo "Submitted $N jobs."
