@@ -4,3 +4,8 @@ sim_output/
 .vscode/
 .venv/
 CLAUDE.md
+build_cuda*/
+bin_cuda*/
+cuda_check
+sim_cuda
+naive_sim_cuda

@@ -1,4 +1,10 @@
 #!/bin/bash
+#
+# Usage: ./times.sh [log_prefix]
+#   log_prefix defaults to nbody_sim (CPU jobs); use nbody_cuda for
+#   main_slurm_cuda.sh jobs. Reads <log_prefix>_<jobid>.err in this directory.
+
+PREFIX="${1:-nbody_sim}"
 
 echo "Job ID        Real (s)       User (s)       Sys (s)"
 echo "------------------------------------------------------"
@@ -8,7 +14,7 @@ total_user=0
 total_sys=0
 count=0
 
-for file in nbody_sim_*.err; do
+for file in "${PREFIX}"_*.err; do
     [ -f "$file" ] || continue
 
     real=$(grep '^real' "$file" | awk '{print $2}')
@@ -20,7 +26,7 @@ for file in nbody_sim_*.err; do
         continue
     fi
 
-    job_id=$(echo "$file" | sed -E 's/nbody_sim_([0-9]+)\.err/\1/')
+    job_id=$(echo "$file" | sed -E "s/^${PREFIX}_([0-9]+)\.err$/\1/")
 
     # Convert 0m14.512s -> 14.512 seconds
     real_sec=$(echo "$real" | sed -E 's/([0-9]+)m([0-9.]+)s/\1*60+\2/' | bc -l)

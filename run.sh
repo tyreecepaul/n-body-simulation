@@ -16,7 +16,7 @@ fi
 
 for ((i=1; i<=N; i++)); do
     echo "Submitting run $i/$N..."
-    sbatch main_slurm.sh
+    sbatch main_slurm_cuda.sh
 done
 
 echo "Submitted $N jobs."
