@@ -1,10 +1,14 @@
 #include "Simulation.h"
 #include <algorithm>
+#include <chrono>
 #include <cstdint>
 #include <cstring>
 #include <fstream>
 #include <iostream>
 #include <string>
+#ifdef _OPENMP
+#include <omp.h>
+#endif
 
 // Output file layout (all little-endian, native float32/uint32).
 // Format version "NBS2" — breaking change from the original 6-float/body
@@ -145,6 +149,11 @@ int main(int argc, char **argv) {
   writeFrame();
   markFrameComplete();
 
+  // Wall time of the step loop (including output frames), excluding process
+  // start-up and setup. Use this or `real`, not `user`, to compare runs:
+  // user time is CPU time summed over all threads.
+  const auto loopStart = std::chrono::steady_clock::now();
+
   for (std::uint32_t step = 1; step <= totalSteps; ++step) {
     sim.step(); // attract() -> quadtree.build() reorders sim.bodies
     if (step % outputEvery == 0) {
@@ -153,6 +162,10 @@ int main(int argc, char **argv) {
       markFrameComplete();
     }
   }
+
+  const double loopMs = std::chrono::duration<double, std::milli>(
+                            std::chrono::steady_clock::now() - loopStart)
+                            .count();
 
   out.close();
   if (!out) {
@@ -164,6 +177,15 @@ int main(int argc, char **argv) {
             << " output_every=" << outputEvery
             << " frames_written=" << completedFrames << " (expected "
             << numFrames << ") -> " << outputPath << "\n";
+#ifdef _OPENMP
+  const int threads = omp_get_max_threads();
+#else
+  const int threads = 1;
+#endif
+  std::cerr << "BH: n=" << nBodies << " threads=" << threads
+            << " steps=" << totalSteps << " total_time=" << loopMs << " ms"
+            << " avg_step=" << (totalSteps ? loopMs / totalSteps : 0.0)
+            << " ms\n";
 
   return 0;
 }
