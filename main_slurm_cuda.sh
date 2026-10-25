@@ -16,15 +16,17 @@ set -euo pipefail
 cd "${SLURM_SUBMIT_DIR:-.}"
 
 # ---- toolchain ----
-# nvcc must be on PATH. sbatch passes your environment through, so running
-# `module load cuda` before submitting works; otherwise try it here.
+# nvcc must be on PATH. sbatch passes your environment through, so a
+# `module load cuda/12.2` before submitting works; otherwise load it here.
+# (Not plain `cuda`: the default module, 11.4, has no nvcc on this cluster.)
+CUDA_MODULE="cuda/12.2"
 if ! command -v nvcc >/dev/null 2>&1 && command -v module >/dev/null 2>&1; then
     set +u  # module scripts often reference unset variables
-    module load cuda
+    module load "${CUDA_MODULE}"
     set -u
 fi
 if ! command -v nvcc >/dev/null 2>&1; then
-    echo "nvcc not found: run 'module load cuda' (see 'module avail cuda') before sbatch" >&2
+    echo "nvcc not found: run 'module load ${CUDA_MODULE}' (see 'module avail cuda') before sbatch" >&2
     exit 1
 fi
 nvcc --version | tail -1

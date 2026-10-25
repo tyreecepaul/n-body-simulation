@@ -80,7 +80,7 @@ def _marker_sizes(radius: np.ndarray, max_marker: float, min_marker: float = 5.0
 	if r_scale <= 0:
 		r_scale = 1.0
 	sizes = min_marker + (r / r_scale) * max_marker
-	return np.clip(sizes, 5.0, max_marker + min_marker)
+	return np.clip(sizes, min_marker, max_marker + min_marker)
 
 
 def parse_args() -> argparse.Namespace:
@@ -117,6 +117,13 @@ def parse_args() -> argparse.Namespace:
 		default=5.0,
 		help="Floor marker size for the smallest bodies.",
 	)
+	parser.add_argument(
+		"--alpha",
+		type=float,
+		default=1.0,
+		help="Marker opacity in (0, 1]. Below 1, dense regions build up brighter "
+		"instead of saturating (useful with ~1M bodies and tiny markers).",
+	)
 	return parser.parse_args()
 
 
@@ -132,6 +139,8 @@ def main() -> int:
 		raise ValueError("--max-marker must be positive.")
 	if args.min_marker < 0:
 		raise ValueError("--min-marker must be non-negative.")
+	if not 0.0 < args.alpha <= 1.0:
+		raise ValueError("--alpha must be in (0, 1].")
 
 	input_path = _resolve_input_path(args.input)
 
@@ -183,7 +192,7 @@ def main() -> int:
 		s=sizes,
 		cmap=magenta_white,
 		norm=norm,
-		alpha=1.0,
+		alpha=args.alpha,
 		edgecolors="none",
 	)
 
@@ -210,8 +219,8 @@ def main() -> int:
 		sim_step = i * stride_step
 		sim_time = sim_step * dt
 		info_text.set_text(
-			f"frame {i + 1}/{len(pos)}\\n"
-			f"step {sim_step}/{total_steps}\\n"
+			f"frame {i + 1}/{len(pos)}\n"
+			f"step {sim_step}/{total_steps}\n"
 			f"time {sim_time:.3f}"
 		)
 		return scatter, info_text
