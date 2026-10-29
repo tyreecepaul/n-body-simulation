@@ -19,6 +19,9 @@ cd "${SLURM_SUBMIT_DIR:-.}"
 N_BODIES=10000
 TOTAL_STEPS=1000
 OUTPUT_EVERY=2
+# 1: write the trajectory .bin; 0: write nothing (times computation only;
+# OUTPUT_EVERY is then unused and logged as "none").
+WRITE_OUTPUT=1
 OUTPUT_DIR="sim_output"
 OUTPUT_FILE="${OUTPUT_DIR}/nbody_${SLURM_JOB_ID:-local}.bin"
  
@@ -28,6 +31,15 @@ mkdir -p "${OUTPUT_DIR}"
 make
  
 # ---- run ----
-time ./sim "${N_BODIES}" "${TOTAL_STEPS}" "${OUTPUT_EVERY}" "${OUTPUT_FILE}"
- 
-echo "Simulation output written to: ${OUTPUT_FILE}"
+# Recorded in the .err log next to `time`'s output; times.sh reads them.
+LOGGED_EVERY=$([ "${WRITE_OUTPUT}" = 1 ] && echo "${OUTPUT_EVERY}" || echo none)
+echo "config threads=1 n_bodies=${N_BODIES} steps=${TOTAL_STEPS} output_every=${LOGGED_EVERY}" >&2
+echo "node $(hostname) cpu=\"$(lscpu | sed -n 's/^Model name:[[:space:]]*//p')\"" >&2
+if [ "${WRITE_OUTPUT}" = 1 ]; then
+    time ./sim "${N_BODIES}" "${TOTAL_STEPS}" "${OUTPUT_EVERY}" "${OUTPUT_FILE}"
+else
+    time ./sim "${N_BODIES}" "${TOTAL_STEPS}" "${OUTPUT_EVERY}"
+fi
+if [ "${WRITE_OUTPUT}" = 1 ]; then
+    echo "Simulation output written to: ${OUTPUT_FILE}"
+fi
