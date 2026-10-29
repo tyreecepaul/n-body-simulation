@@ -6,6 +6,9 @@
 // copied back and placed at their id slot (array position i in the file is
 // always Body::id i), then written with one call. Unlike Main.cpp, this
 // doesn't reorder the simulation's own arrays.
+//
+// The output path is optional: without it nothing is written or copied
+// back (no file, no frames), so the run times GPU computation only.
 
 #include "CudaSimulation.cuh"
 
@@ -17,26 +20,31 @@
 #include <vector>
 
 int main(int argc, char **argv) {
-  if (argc != 5) {
+  if (argc != 4 && argc != 5) {
     std::cerr << "Usage: " << argv[0]
-              << " <n_bodies> <total_steps> <output_every> <output_path>\n";
+              << " <n_bodies> <total_steps> <output_every> [output_path]\n"
+              << "  (no output_path: run without writing any output)\n";
     return 1;
   }
 
   std::size_t nBodies = static_cast<std::size_t>(std::stoul(argv[1]));
   std::uint32_t totalSteps = static_cast<std::uint32_t>(std::stoul(argv[2]));
   std::uint32_t outputEvery = static_cast<std::uint32_t>(std::stoul(argv[3]));
-  std::string outputPath = argv[4];
+  const bool writeOutput = argc == 5;
+  std::string outputPath = writeOutput ? argv[4] : "";
 
   if (outputEvery == 0) {
     std::cerr << "output_every must be >= 1\n";
     return 1;
   }
 
-  std::ofstream out(outputPath, std::ios::binary);
-  if (!out) {
-    std::cerr << "Failed to open output file: " << outputPath << "\n";
-    return 1;
+  std::ofstream out;
+  if (writeOutput) {
+    out.open(outputPath, std::ios::binary);
+    if (!out) {
+      std::cerr << "Failed to open output file: " << outputPath << "\n";
+      return 1;
+    }
   }
 
   std::uint32_t n32 = static_cast<std::uint32_t>(nBodies);
@@ -45,36 +53,40 @@ int main(int argc, char **argv) {
 
   CudaSimulation sim(nBodies);
 
-  char magic[4] = {'N', 'B', 'S', '2'};
-  out.write(magic, sizeof(magic));
-  out.write(reinterpret_cast<const char *>(&n32), sizeof(n32));
-  out.write(reinterpret_cast<const char *>(&totalSteps), sizeof(totalSteps));
-  out.write(reinterpret_cast<const char *>(&outputEvery), sizeof(outputEvery));
-  out.write(reinterpret_cast<const char *>(&numFrames), sizeof(numFrames));
-  const std::streampos completedFramesOffset = out.tellp();
-  out.write(reinterpret_cast<const char *>(&completedFrames),
-            sizeof(completedFrames));
-  out.write(reinterpret_cast<const char *>(&sim.dt), sizeof(sim.dt));
-
-  // mass and radius never change: write them once, in id order.
+  std::streampos completedFramesOffset;
   std::vector<std::uint32_t> ids;
-  std::vector<float> mass, radius, byId(nBodies);
-  sim.bodies.id.download(ids);
-  sim.bodies.mass.download(mass);
-  sim.bodies.radius.download(radius);
-  for (std::size_t i = 0; i < nBodies; ++i) {
-    byId[ids[i]] = mass[i];
+  if (writeOutput) {
+    char magic[4] = {'N', 'B', 'S', '2'};
+    out.write(magic, sizeof(magic));
+    out.write(reinterpret_cast<const char *>(&n32), sizeof(n32));
+    out.write(reinterpret_cast<const char *>(&totalSteps), sizeof(totalSteps));
+    out.write(reinterpret_cast<const char *>(&outputEvery),
+              sizeof(outputEvery));
+    out.write(reinterpret_cast<const char *>(&numFrames), sizeof(numFrames));
+    completedFramesOffset = out.tellp();
+    out.write(reinterpret_cast<const char *>(&completedFrames),
+              sizeof(completedFrames));
+    out.write(reinterpret_cast<const char *>(&sim.dt), sizeof(sim.dt));
+
+    // mass and radius never change: write them once, in id order.
+    std::vector<float> mass, radius, byId(nBodies);
+    sim.bodies.id.download(ids);
+    sim.bodies.mass.download(mass);
+    sim.bodies.radius.download(radius);
+    for (std::size_t i = 0; i < nBodies; ++i) {
+      byId[ids[i]] = mass[i];
+    }
+    out.write(reinterpret_cast<const char *>(byId.data()),
+              static_cast<std::streamsize>(nBodies * sizeof(float)));
+    for (std::size_t i = 0; i < nBodies; ++i) {
+      byId[ids[i]] = radius[i];
+    }
+    out.write(reinterpret_cast<const char *>(byId.data()),
+              static_cast<std::streamsize>(nBodies * sizeof(float)));
   }
-  out.write(reinterpret_cast<const char *>(byId.data()),
-            static_cast<std::streamsize>(nBodies * sizeof(float)));
-  for (std::size_t i = 0; i < nBodies; ++i) {
-    byId[ids[i]] = radius[i];
-  }
-  out.write(reinterpret_cast<const char *>(byId.data()),
-            static_cast<std::streamsize>(nBodies * sizeof(float)));
 
   std::vector<float> px, py, vx, vy;
-  std::vector<float> frame(nBodies * 4);
+  std::vector<float> frame(writeOutput ? nBodies * 4 : 0);
   auto writeFrame = [&]() {
     sim.bodies.posX.download(px);
     sim.bodies.posY.download(py);
@@ -101,8 +113,10 @@ int main(int argc, char **argv) {
     out.seekp(savedPos);
   };
 
-  writeFrame();
-  markFrameComplete();
+  if (writeOutput) {
+    writeFrame();
+    markFrameComplete();
+  }
 
   // Timed: the step loop including output frames (like `time ./sim`, but
   // without CUDA start-up and the initial upload).
@@ -130,15 +144,15 @@ int main(int argc, char **argv) {
 
   for (std::uint32_t step = 1; step <= totalSteps; ++step) {
     sim.step();
-    if (step % outputEvery == 0) {
+    if (writeOutput && step % outputEvery == 0) {
       endSegment();
       writeFrame();
       markFrameComplete();
       CUDA_CHECK(cudaEventRecord(segmentStart));
     }
   }
-  if (totalSteps % outputEvery != 0) {
-    endSegment(); // steps after the last frame
+  if (!writeOutput || totalSteps % outputEvery != 0) {
+    endSegment(); // steps after the last frame (all of them without output)
   }
 
   CUDA_CHECK(cudaDeviceSynchronize());
@@ -148,16 +162,19 @@ int main(int argc, char **argv) {
   CUDA_CHECK(cudaEventDestroy(segmentStart));
   CUDA_CHECK(cudaEventDestroy(segmentStop));
 
-  out.close();
-  if (!out) {
-    std::cerr << "Error while writing output file: " << outputPath << "\n";
-    return 1;
+  if (writeOutput) {
+    out.close();
+    if (!out) {
+      std::cerr << "Error while writing output file: " << outputPath << "\n";
+      return 1;
+    }
   }
 
   std::cerr << "Done. n=" << nBodies << " steps=" << totalSteps
             << " output_every=" << outputEvery
             << " frames_written=" << completedFrames << " (expected "
-            << numFrames << ") -> " << outputPath << "\n";
+            << (writeOutput ? numFrames : 0) << ") -> "
+            << (writeOutput ? outputPath : "(no output)") << "\n";
   std::cerr << "CUDA BH: n=" << nBodies << " steps=" << totalSteps
             << " total_time=" << elapsedMs << " ms"
             << " avg_step=" << (totalSteps ? elapsedMs / totalSteps : 0.0)
