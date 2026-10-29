@@ -54,5 +54,8 @@ OUTPUT_DIR="sim_output"
 OUTPUT_FILE="${OUTPUT_DIR}/nbody_cuda_${JOB_TAG}.bin"
 mkdir -p "${OUTPUT_DIR}"
 
+# Recorded in the .err log next to `time`'s output; times.sh reads them.
+echo "config device=gpu n_bodies=${N_BODIES} steps=${TOTAL_STEPS} output_every=${OUTPUT_EVERY}" >&2
+echo "node $(hostname) gpu=\"$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -1)\"" >&2
 time "./${BIN_DIR}/sim_cuda" "${N_BODIES}" "${TOTAL_STEPS}" "${OUTPUT_EVERY}" "${OUTPUT_FILE}"
 echo "Simulation output written to: ${OUTPUT_FILE}"

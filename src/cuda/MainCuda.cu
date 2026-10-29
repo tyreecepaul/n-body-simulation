@@ -106,21 +106,47 @@ int main(int argc, char **argv) {
 
   // Timed: the step loop including output frames (like `time ./sim`, but
   // without CUDA start-up and the initial upload).
+  //
+  // Compute time alone is measured with CUDA events around each run of
+  // steps between output frames: everything is on the default stream and
+  // the frame downloads come after the segment's stop event, so it covers
+  // the steps' GPU work (and any host round-trips inside step()) but not
+  // the copy-back or the file writes.
+  cudaEvent_t segmentStart, segmentStop;
+  CUDA_CHECK(cudaEventCreate(&segmentStart));
+  CUDA_CHECK(cudaEventCreate(&segmentStop));
+  double computeMs = 0.0;
+  auto endSegment = [&]() {
+    CUDA_CHECK(cudaEventRecord(segmentStop));
+    CUDA_CHECK(cudaEventSynchronize(segmentStop));
+    float ms = 0.0f;
+    CUDA_CHECK(cudaEventElapsedTime(&ms, segmentStart, segmentStop));
+    computeMs += ms;
+  };
+
   CUDA_CHECK(cudaDeviceSynchronize());
   const auto start = std::chrono::steady_clock::now();
+  CUDA_CHECK(cudaEventRecord(segmentStart));
 
   for (std::uint32_t step = 1; step <= totalSteps; ++step) {
     sim.step();
     if (step % outputEvery == 0) {
-      writeFrame(); // the downloads synchronise with the GPU
+      endSegment();
+      writeFrame();
       markFrameComplete();
+      CUDA_CHECK(cudaEventRecord(segmentStart));
     }
+  }
+  if (totalSteps % outputEvery != 0) {
+    endSegment(); // steps after the last frame
   }
 
   CUDA_CHECK(cudaDeviceSynchronize());
   const double elapsedMs = std::chrono::duration<double, std::milli>(
                                std::chrono::steady_clock::now() - start)
                                .count();
+  CUDA_CHECK(cudaEventDestroy(segmentStart));
+  CUDA_CHECK(cudaEventDestroy(segmentStop));
 
   out.close();
   if (!out) {
@@ -135,7 +161,10 @@ int main(int argc, char **argv) {
   std::cerr << "CUDA BH: n=" << nBodies << " steps=" << totalSteps
             << " total_time=" << elapsedMs << " ms"
             << " avg_step=" << (totalSteps ? elapsedMs / totalSteps : 0.0)
-            << " ms\n";
+            << " ms compute_time=" << computeMs << " ms"
+            << " avg_compute_step="
+            << (totalSteps ? computeMs / totalSteps : 0.0) << " ms"
+            << " output_time=" << (elapsedMs - computeMs) << " ms\n";
 
   return 0;
 }

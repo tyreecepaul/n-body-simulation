@@ -28,6 +28,10 @@ mkdir -p "${OUTPUT_DIR}"
 make
  
 # ---- run ----
+# Recorded in the .err log next to `time`'s output; times.sh reads them.
+# (This branch's sim is serial, so threads=1.)
+echo "config threads=1 n_bodies=${N_BODIES} steps=${TOTAL_STEPS} output_every=${OUTPUT_EVERY}" >&2
+echo "node $(hostname) cpu=\"$(lscpu | sed -n 's/^Model name:[[:space:]]*//p')\"" >&2
 time ./sim "${N_BODIES}" "${TOTAL_STEPS}" "${OUTPUT_EVERY}" "${OUTPUT_FILE}"
  
 echo "Simulation output written to: ${OUTPUT_FILE}"

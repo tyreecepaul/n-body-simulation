@@ -1,5 +1,6 @@
 #include "Simulation.h"
 #include <algorithm>
+#include <chrono>
 #include <cstdint>
 #include <cstring>
 #include <fstream>
@@ -127,14 +128,29 @@ int main(int argc, char **argv) {
   writeFrame();
   markFrameComplete();
 
+  // Timed: the whole step loop (total_time), and within it only the
+  // sim.step() calls (compute_time), so frame output (the id sort and the
+  // file writes) can be separated out as output_time.
+  using Clock = std::chrono::steady_clock;
+  double computeMs = 0.0;
+  const auto loopStart = Clock::now();
+
   for (std::uint32_t step = 1; step <= totalSteps; ++step) {
+    const auto stepStart = Clock::now();
     sim.step(); // attract() -> quadtree.build() reorders sim.bodies
+    computeMs += std::chrono::duration<double, std::milli>(Clock::now() -
+                                                           stepStart)
+                     .count();
     if (step % outputEvery == 0) {
       sortById(sim.bodies); // restore id order before this frame's write
       writeFrame();
       markFrameComplete();
     }
   }
+
+  const double loopMs =
+      std::chrono::duration<double, std::milli>(Clock::now() - loopStart)
+          .count();
 
   out.close();
   if (!out) {
@@ -146,6 +162,13 @@ int main(int argc, char **argv) {
             << " output_every=" << outputEvery
             << " frames_written=" << completedFrames << " (expected "
             << numFrames << ") -> " << outputPath << "\n";
+  std::cerr << "BH: n=" << nBodies << " threads=1"
+            << " steps=" << totalSteps << " total_time=" << loopMs << " ms"
+            << " avg_step=" << (totalSteps ? loopMs / totalSteps : 0.0)
+            << " ms compute_time=" << computeMs << " ms"
+            << " avg_compute_step="
+            << (totalSteps ? computeMs / totalSteps : 0.0) << " ms"
+            << " output_time=" << (loopMs - computeMs) << " ms\n";
 
   return 0;
 }
