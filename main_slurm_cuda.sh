@@ -50,22 +50,30 @@ make -s -j"${SLURM_CPUS_PER_TASK:-1}" cuda CUDA_BUILD_DIR="${BUILD_DIR}" CUDA_BI
 N_BODIES=10000
 TOTAL_STEPS=1000
 OUTPUT_EVERY=2
-# 1: write the trajectory .bin; 0: write nothing (times computation only;
-# OUTPUT_EVERY is then unused and logged as "none").
-WRITE_OUTPUT=1
+# Default: computation only, no .bin file (OUTPUT_EVERY is then unused and
+# logged as "none"). Pass "visual" (./run.sh N visual, or sbatch <this
+# script> visual) to also write the trajectory .bin every OUTPUT_EVERY
+# steps, for run.py.
+VISUAL=0
+if [ "${1:-}" = visual ]; then
+    VISUAL=1
+elif [ -n "${1:-}" ]; then
+    echo "Unknown argument '$1' (expected nothing or 'visual')" >&2
+    exit 1
+fi
 OUTPUT_DIR="sim_output"
 OUTPUT_FILE="${OUTPUT_DIR}/nbody_cuda_${JOB_TAG}.bin"
 mkdir -p "${OUTPUT_DIR}"
 
 # Recorded in the .err log next to `time`'s output; times.sh reads them.
-LOGGED_EVERY=$([ "${WRITE_OUTPUT}" = 1 ] && echo "${OUTPUT_EVERY}" || echo none)
+LOGGED_EVERY=$([ "${VISUAL}" = 1 ] && echo "${OUTPUT_EVERY}" || echo none)
 echo "config device=gpu n_bodies=${N_BODIES} steps=${TOTAL_STEPS} output_every=${LOGGED_EVERY}" >&2
 echo "node $(hostname) gpu=\"$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -1)\"" >&2
-if [ "${WRITE_OUTPUT}" = 1 ]; then
+if [ "${VISUAL}" = 1 ]; then
     time "./${BIN_DIR}/sim_cuda" "${N_BODIES}" "${TOTAL_STEPS}" "${OUTPUT_EVERY}" "${OUTPUT_FILE}"
 else
     time "./${BIN_DIR}/sim_cuda" "${N_BODIES}" "${TOTAL_STEPS}" "${OUTPUT_EVERY}"
 fi
-if [ "${WRITE_OUTPUT}" = 1 ]; then
+if [ "${VISUAL}" = 1 ]; then
     echo "Simulation output written to: ${OUTPUT_FILE}"
 fi
