@@ -151,11 +151,18 @@ int main(int argc, char **argv) {
 
   // Wall time of the step loop (including output frames), excluding process
   // start-up and setup. Use this or `real`, not `user`, to compare runs:
-  // user time is CPU time summed over all threads.
+  // user time is CPU time summed over all threads. compute_time is the wall
+  // time of the sim.step() calls alone, so frame output (the id sort and
+  // the file writes) can be separated out as output_time.
+  double computeMs = 0.0;
   const auto loopStart = std::chrono::steady_clock::now();
 
   for (std::uint32_t step = 1; step <= totalSteps; ++step) {
+    const auto stepStart = std::chrono::steady_clock::now();
     sim.step(); // attract() -> quadtree.build() reorders sim.bodies
+    computeMs += std::chrono::duration<double, std::milli>(
+                     std::chrono::steady_clock::now() - stepStart)
+                     .count();
     if (step % outputEvery == 0) {
       sortById(sim.bodies, sortScratch); // restore id order before this frame's write
       writeFrame();
@@ -185,7 +192,10 @@ int main(int argc, char **argv) {
   std::cerr << "BH: n=" << nBodies << " threads=" << threads
             << " steps=" << totalSteps << " total_time=" << loopMs << " ms"
             << " avg_step=" << (totalSteps ? loopMs / totalSteps : 0.0)
-            << " ms\n";
+            << " ms compute_time=" << computeMs << " ms"
+            << " avg_compute_step="
+            << (totalSteps ? computeMs / totalSteps : 0.0) << " ms"
+            << " output_time=" << (loopMs - computeMs) << " ms\n";
 
   return 0;
 }
