@@ -20,9 +20,17 @@ cd "${SLURM_SUBMIT_DIR:-.}"
 N_BODIES=10000
 TOTAL_STEPS=1000
 OUTPUT_EVERY=2
-# 1: write the trajectory .bin; 0: write nothing (times computation only;
-# OUTPUT_EVERY is then unused and logged as "none").
-WRITE_OUTPUT=1
+# Default: computation only, no .bin file (OUTPUT_EVERY is then unused and
+# logged as "none"). Pass "visual" (./run.sh N visual, or sbatch <this
+# script> visual) to also write the trajectory .bin every OUTPUT_EVERY
+# steps, for run.py.
+VISUAL=0
+if [ "${1:-}" = visual ]; then
+    VISUAL=1
+elif [ -n "${1:-}" ]; then
+    echo "Unknown argument '$1' (expected nothing or 'visual')" >&2
+    exit 1
+fi
 OUTPUT_DIR="sim_output"
 OUTPUT_FILE="${OUTPUT_DIR}/nbody_${SLURM_JOB_ID:-local}.bin"
  
@@ -55,14 +63,14 @@ make -s BUILD_DIR="${BUILD_DIR}" TARGET="${BIN}"
 # Recorded in the .err log next to `time`'s output; times.sh groups by it.
 # Compare runs by `real` (or the BH: total_time line), never `user`: user
 # is CPU time summed over all threads, so it grows with thread count.
-LOGGED_EVERY=$([ "${WRITE_OUTPUT}" = 1 ] && echo "${OUTPUT_EVERY}" || echo none)
+LOGGED_EVERY=$([ "${VISUAL}" = 1 ] && echo "${OUTPUT_EVERY}" || echo none)
 echo "config threads=${OMP_NUM_THREADS} n_bodies=${N_BODIES} steps=${TOTAL_STEPS} output_every=${LOGGED_EVERY}" >&2
 echo "node $(hostname) cpu=\"$(lscpu | sed -n 's/^Model name:[[:space:]]*//p')\" allocated_cpus=$(nproc)" >&2
-if [ "${WRITE_OUTPUT}" = 1 ]; then
+if [ "${VISUAL}" = 1 ]; then
     time "./${BIN}" "${N_BODIES}" "${TOTAL_STEPS}" "${OUTPUT_EVERY}" "${OUTPUT_FILE}"
 else
     time "./${BIN}" "${N_BODIES}" "${TOTAL_STEPS}" "${OUTPUT_EVERY}"
 fi
-if [ "${WRITE_OUTPUT}" = 1 ]; then
+if [ "${VISUAL}" = 1 ]; then
     echo "Simulation output written to: ${OUTPUT_FILE}"
 fi
