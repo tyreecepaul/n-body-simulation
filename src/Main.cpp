@@ -46,6 +46,10 @@
 //   frames.
 //
 // Total size = 28 + n_bodies * 8 + num_frames * n_bodies * 4 * 4 bytes.
+//
+// The output path is optional: without it nothing is written (no file, no
+// frames, no id sorts between steps), so the run times computation only.
+// output_every is still required on the command line but is then unused.
 
 namespace {
 // Restores id order (index i holds Body::id == i). uniformDisc() assigns
@@ -62,26 +66,31 @@ void sortById(std::vector<Body> &bodies, std::vector<Body> &scratch) {
 } // namespace
 
 int main(int argc, char **argv) {
-  if (argc != 5) {
+  if (argc != 4 && argc != 5) {
     std::cerr << "Usage: " << argv[0]
-              << " <n_bodies> <total_steps> <output_every> <output_path>\n";
+              << " <n_bodies> <total_steps> <output_every> [output_path]\n"
+              << "  (no output_path: run without writing any output)\n";
     return 1;
   }
 
   std::size_t nBodies = static_cast<std::size_t>(std::stoul(argv[1]));
   std::uint32_t totalSteps = static_cast<std::uint32_t>(std::stoul(argv[2]));
   std::uint32_t outputEvery = static_cast<std::uint32_t>(std::stoul(argv[3]));
-  std::string outputPath = argv[4];
+  const bool writeOutput = argc == 5;
+  std::string outputPath = writeOutput ? argv[4] : "";
 
   if (outputEvery == 0) {
     std::cerr << "output_every must be >= 1\n";
     return 1;
   }
 
-  std::ofstream out(outputPath, std::ios::binary);
-  if (!out) {
-    std::cerr << "Failed to open output file: " << outputPath << "\n";
-    return 1;
+  std::ofstream out;
+  if (writeOutput) {
+    out.open(outputPath, std::ios::binary);
+    if (!out) {
+      std::cerr << "Failed to open output file: " << outputPath << "\n";
+      return 1;
+    }
   }
 
   std::uint32_t n32 = static_cast<std::uint32_t>(nBodies);
@@ -91,38 +100,45 @@ int main(int argc, char **argv) {
 
   Simulation sim(nBodies);
 
-  char magic[4] = {'N', 'B', 'S', '2'};
-  out.write(magic, sizeof(magic));
-  out.write(reinterpret_cast<const char *>(&n32), sizeof(n32));
-  out.write(reinterpret_cast<const char *>(&totalSteps), sizeof(totalSteps));
-  out.write(reinterpret_cast<const char *>(&outputEvery), sizeof(outputEvery));
-  out.write(reinterpret_cast<const char *>(&numFrames), sizeof(numFrames));
-
   // Remember where completed_frames lives so we can rewrite it in place
   // after every frame without disturbing the append position.
-  const std::streampos completedFramesOffset = out.tellp();
-  out.write(reinterpret_cast<const char *>(&completedFrames),
-            sizeof(completedFrames));
-  out.write(reinterpret_cast<const char *>(&sim.dt), sizeof(sim.dt));
+  std::streampos completedFramesOffset;
+  if (writeOutput) {
+    char magic[4] = {'N', 'B', 'S', '2'};
+    out.write(magic, sizeof(magic));
+    out.write(reinterpret_cast<const char *>(&n32), sizeof(n32));
+    out.write(reinterpret_cast<const char *>(&totalSteps), sizeof(totalSteps));
+    out.write(reinterpret_cast<const char *>(&outputEvery),
+              sizeof(outputEvery));
+    out.write(reinterpret_cast<const char *>(&numFrames), sizeof(numFrames));
+    completedFramesOffset = out.tellp();
+    out.write(reinterpret_cast<const char *>(&completedFrames),
+              sizeof(completedFrames));
+    out.write(reinterpret_cast<const char *>(&sim.dt), sizeof(sim.dt));
+  }
 
   // uniformDisc() sorts bodies by radius from center before returning, so
   // even frame 0's array order isn't id order — sort before this first
   // write too, or the mass/radius arrays wouldn't line up with id 0..n-1.
+  // (Done without output too, so both modes start from the same order.)
   std::vector<Body> sortScratch;
   sortById(sim.bodies, sortScratch);
 
   // mass and radius never change after construction (collide()/iterate()
   // only touch pos/vel/acc), so write them once instead of every frame.
-  for (const Body &body : sim.bodies) {
-    out.write(reinterpret_cast<const char *>(&body.mass), sizeof(float));
-  }
-  for (const Body &body : sim.bodies) {
-    out.write(reinterpret_cast<const char *>(&body.radius), sizeof(float));
+  if (writeOutput) {
+    for (const Body &body : sim.bodies) {
+      out.write(reinterpret_cast<const char *>(&body.mass), sizeof(float));
+    }
+    for (const Body &body : sim.bodies) {
+      out.write(reinterpret_cast<const char *>(&body.radius), sizeof(float));
+    }
   }
 
   // Fill the whole frame in parallel, then write it with one call instead
   // of one small write per body.
-  std::vector<float> frameBuffer(static_cast<std::size_t>(nBodies) * 4);
+  std::vector<float> frameBuffer(
+      writeOutput ? static_cast<std::size_t>(nBodies) * 4 : 0);
   auto writeFrame = [&]() {
 #pragma omp parallel for schedule(static)
     for (std::size_t i = 0; i < nBodies; ++i) {
@@ -146,8 +162,10 @@ int main(int argc, char **argv) {
     out.seekp(savedPos);
   };
 
-  writeFrame();
-  markFrameComplete();
+  if (writeOutput) {
+    writeFrame();
+    markFrameComplete();
+  }
 
   // Wall time of the step loop (including output frames), excluding process
   // start-up and setup. Use this or `real`, not `user`, to compare runs:
@@ -163,7 +181,7 @@ int main(int argc, char **argv) {
     computeMs += std::chrono::duration<double, std::milli>(
                      std::chrono::steady_clock::now() - stepStart)
                      .count();
-    if (step % outputEvery == 0) {
+    if (writeOutput && step % outputEvery == 0) {
       sortById(sim.bodies, sortScratch); // restore id order before this frame's write
       writeFrame();
       markFrameComplete();
@@ -174,16 +192,19 @@ int main(int argc, char **argv) {
                             std::chrono::steady_clock::now() - loopStart)
                             .count();
 
-  out.close();
-  if (!out) {
-    std::cerr << "Error while writing output file: " << outputPath << "\n";
-    return 1;
+  if (writeOutput) {
+    out.close();
+    if (!out) {
+      std::cerr << "Error while writing output file: " << outputPath << "\n";
+      return 1;
+    }
   }
 
   std::cerr << "Done. n=" << nBodies << " steps=" << totalSteps
             << " output_every=" << outputEvery
             << " frames_written=" << completedFrames << " (expected "
-            << numFrames << ") -> " << outputPath << "\n";
+            << (writeOutput ? numFrames : 0) << ") -> "
+            << (writeOutput ? outputPath : "(no output)") << "\n";
 #ifdef _OPENMP
   const int threads = omp_get_max_threads();
 #else
