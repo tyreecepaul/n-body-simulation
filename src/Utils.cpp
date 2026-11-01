@@ -3,8 +3,8 @@
 #include <cmath>
 #include <random>
 
-std::vector<Body> uniformDisc(std::size_t n) {
-  std::mt19937 rng(0);
+std::vector<Body> uniformDisc(std::size_t n, unsigned seed) {
+  std::mt19937 rng(seed);
   std::uniform_real_distribution<float> unit(0.0f, 1.0f);
 
   const float innerRadius = 25.0f;

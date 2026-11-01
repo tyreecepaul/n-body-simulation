@@ -101,15 +101,15 @@ __global__ void finishKernel(NodeArrays t, int nodeCount) {
 
 // One thread per body, in Morton order, so neighbouring threads in a warp
 // walk nearly the same path through the tree.
-__global__ void forceKernel(int n, NodeArrays t, TreeBodies b,
-                            float *__restrict__ accX,
+__global__ void forceKernel(int n, NodeArrays t, TreeBodies b, float tSq,
+                            float eSq, float *__restrict__ accX,
                             float *__restrict__ accY) {
   const int i = blockIdx.x * blockDim.x + threadIdx.x;
   if (i >= n) {
     return;
   }
   float ax, ay;
-  accelerationAt(b.posX[i], b.posY[i], t, b, ax, ay);
+  accelerationAt(b.posX[i], b.posY[i], t, b, ax, ay, tSq, eSq);
   accX[i] = ax;
   accY[i] = ay;
 }
@@ -497,7 +497,8 @@ void CudaQuadTree::buildHostLoop(const NodeArrays &t, const TreeBodies &tb) {
   CUDA_CHECK_LAUNCH();
 }
 
-void CudaQuadTree::computeForces(DeviceBodies &b) {
+void CudaQuadTree::computeForces(DeviceBodies &b, float theta,
+                                 float epsilon) {
   const int n = static_cast<int>(n_);
   if (n == 0) {
     return;
@@ -507,7 +508,8 @@ void CudaQuadTree::computeForces(DeviceBodies &b) {
                      children_.data(), next_.data(),    start_.data(),
                      end_.data()};
   const TreeBodies tb{b.posX.data(), b.posY.data(), b.mass.data()};
-  forceKernel<<<blocksFor(n), kBlock>>>(n, t, tb, b.accX.data(),
+  forceKernel<<<blocksFor(n), kBlock>>>(n, t, tb, theta * theta,
+                                        epsilon * epsilon, b.accX.data(),
                                         b.accY.data());
   CUDA_CHECK_LAUNCH();
 }
