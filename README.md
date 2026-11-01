@@ -1,4 +1,4 @@
-# N-Body Simulation: Barnes-Hut in C++, OpenMP and CUDA
+# N-Body Simulation using Barnes-Hut
 
 ![100,000-body disc galaxy](img/nbody_100k.gif)
 
