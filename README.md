@@ -1,6 +1,8 @@
 # N-Body Simulation: Barnes-Hut in C++, OpenMP and CUDA
 
-![100,000-body disc galaxy](img/nbody_100k.gif)
+<p align="center">
+  <img src="img/nbody_sim.gif" width="400" alt="200,000-body rotating disc galaxy, recorded in the real-time viewer">
+</p>
 
 A 2D gravitational N-body simulation using the Barnes-Hut algorithm, with
 collisions, in three versions that share the same physics:
@@ -12,15 +14,13 @@ collisions, in three versions that share the same physics:
 - **CUDA**: the whole simulation runs on the GPU, using a Morton-ordered tree
   built in one cooperative kernel and lock-free collision resolution.
 
-A naive O(N²) all-pairs version (CPU and GPU) is included as a baseline.
+A naive O(N²) all-pairs version (CPU and GPU) is included as a baseline, and
+an [interactive viewer](#interactive-viewer) runs the CUDA version live, with a
+million bodies on a desktop GPU.
 
 This project is a C++ port and extension of
 [**DeadlockCode/barnes-hut**](https://github.com/DeadlockCode/barnes-hut), the
 Rust implementation it is based on. See [Credits](#credits).
-
-| 1,000 bodies | 10,000 bodies |
-|:---:|:---:|
-| ![1k bodies](img/nbody_1k.gif) | ![10k bodies](img/nbody_10k.gif) |
 
 ## Results
 
@@ -54,8 +54,9 @@ the run time, collisions 16% and the tree build 4%.
 ## Building
 
 Requirements: g++ with C++17 and OpenMP. For the GPU version, the CUDA toolkit
-(tested with 12.2) and an NVIDIA GPU. For visualisation, Python 3 with the
-packages in `requirements.txt`, and ffmpeg for MP4 output.
+(tested with 12.2 on the cluster and 13.4 for the viewer) and an NVIDIA GPU.
+For visualisation, Python 3 with the packages in `requirements.txt`, and ffmpeg
+for MP4 output.
 
 ```bash
 make            # ./sim         Barnes-Hut, OpenMP
@@ -64,6 +65,42 @@ make naive      # ./naive_sim   O(N^2) baseline, OpenMP
 make cuda       # ./sim_cuda, ./naive_sim_cuda, ./cuda_check (nvcc)
 make cuda CUDA_ARCH=sm_89   # target another GPU (default sm_80, A100)
 ```
+
+CMake builds the GPU programs plus the viewer for the local GPU
+(`build-cmake/`). If nvcc rejects your system compiler, add
+`-DCMAKE_CUDA_HOST_COMPILER=g++-15`.
+
+## Interactive viewer
+
+`nbody_viewer` runs the CUDA simulation live and draws it straight from GPU
+memory (CUDA–OpenGL interop), so a million bodies stay interactive on a
+desktop GPU. All the animations in this README were recorded with it.
+
+| Two colliding galaxies | Cold square collapse |
+|:---:|:---:|
+| <img src="img/nbody_two.gif" width="400" alt="Two disc galaxies colliding and merging"> | <img src="img/nbody_square.gif" width="320" alt="A square of bodies at rest collapsing under gravity"> |
+
+```bash
+cmake -B build-cmake && cmake --build build-cmake -j   # needs CUDA, SDL3, GLEW
+./build-cmake/nbody_viewer              # 1,000,000-body disc
+./build-cmake/nbody_viewer 200000       # another body count
+./build-cmake/nbody_viewer run.bin      # continue any sim / sim_cuda output or snapshot
+```
+
+| Input | Action |
+|---|---|
+| left drag / wheel | pan / zoom at the cursor |
+| right button (hold) | attractor at the cursor |
+| shift + click | drop a heavy body |
+| ctrl + drag | launch a cluster of bodies along the drag |
+| space / `.` | pause / single step |
+| `F` / `R` / `H` / Esc | follow centre of mass / record MP4 / hide panel / quit |
+
+The panel has scenario presets (rotating disc, two colliding galaxies, cold
+square) with any body count. It also has live physics settings (dt, θ,
+softening, collisions on or off), display options (speed colour map or
+additive glow), MP4 recording to `recordings/` (via ffmpeg), and snapshots
+in the same `.bin` format that `load_sim.py` and `run.py` read.
 
 ## Running
 
@@ -152,6 +189,7 @@ Each step runs **integrate** (semi-implicit Euler), then **collide**, then
 src/            serial/OpenMP simulation (Main.cpp, QuadTree, Collision, ...)
 src/naive/      O(N^2) baseline
 src/cuda/       GPU simulation, naive GPU baseline and cuda_check test suite
+src/viewer/     real-time viewer (SDL3 + OpenGL + Dear ImGui, CUDA interop)
 cluster/        Slurm job scripts and log summariser
 load_sim.py     reader for .bin trajectory files
 run.py          renders a trajectory to MP4/GIF

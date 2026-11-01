@@ -195,12 +195,13 @@ NBODY_HD inline float fastInvSqrt(float x) {
 }
 
 // Port of QuadTree::acceleration: stackless walk using `next`, opening
-// criterion size^2 < d^2 * theta^2, same softened force law.
+// criterion size^2 < d^2 * theta^2, same softened force law. tSq/eSq
+// default to the CPU's theta and epsilon.
 NBODY_HD inline void accelerationAt(float x, float y, const NodeArrays &t,
                                     const TreeBodies &b, float &ax,
-                                    float &ay) {
-  const float tSq = kTheta * kTheta;
-  const float eSq = kEpsilon * kEpsilon;
+                                    float &ay,
+                                    float tSq = kTheta * kTheta,
+                                    float eSq = kEpsilon * kEpsilon) {
   float accX = 0.0f;
   float accY = 0.0f;
   int node = 0;

@@ -18,7 +18,7 @@
 // -> bottom-up mass/centre-of-mass sums, one kernel per level in reverse.
 //
 // computeForces(): one thread per body walks the tree exactly as
-// QuadTree::acceleration does (theta = 1, epsilon = 1).
+// QuadTree::acceleration does (by default theta = 1, epsilon = 1).
 class CudaQuadTree {
 public:
   explicit CudaQuadTree(std::size_t n);
@@ -28,7 +28,8 @@ public:
 
   // Barnes-Hut accelerations into b.accX/b.accY; b must be as build()
   // left it.
-  void computeForces(DeviceBodies &b);
+  void computeForces(DeviceBodies &b, float theta = tree_detail::kTheta,
+                     float epsilon = tree_detail::kEpsilon);
 
   // Fetched from the device on first call after a cooperative build.
   int nodeCount() const;

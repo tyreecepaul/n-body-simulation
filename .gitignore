@@ -21,3 +21,8 @@ __pycache__/
 .venv/
 .vscode/
 CLAUDE.md
+
+# Viewer
+build-cmake/
+recordings/
+snapshots/
