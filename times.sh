@@ -1,35 +1,60 @@
 #!/bin/bash
 #
-# Summarise timings from the nbody_sim_<jobid>.err logs written by
-# main_slurm.sh: one row per job, then the average per configuration
-# (bodies/steps/output_every) and thread count, with speedup relative to
-# the 1-thread runs of the same configuration.
+# Summarise timings from Slurm job logs: CPU jobs (main_slurm.sh,
+# nbody_sim_<jobid>.err) and GPU jobs (main_slurm_cuda.sh,
+# nbody_cuda_<jobid>.err). One row per job, then one row per configuration
+# (bodies/steps/output_every) and kind (CPU-<threads> or GPU), with speedup
+# against the serial (CPU-1) runs of the same configuration.
+#
+# Usage:
+#   ./times.sh                 # logs in the current directory
+#   ./times.sh DIR [DIR ...]   # combine directories, e.g. the CUDA and CPU
+#                              # checkouts: ./times.sh . ../n-body-simulation
+#   ./times.sh nbody_cuda      # only logs with this prefix (current directory)
 #
 # Speed is wall time: `real` from bash's `time`, and the program's own step
-# loop time ("Loop", from its "BH: ... total_time=" line) where available.
-# `user` is CPU time summed over all threads, so it is shown only as CPU
-# cost: it grows with thread count and is not a speed measure.
+# loop time ("Loop", from its "BH:" / "CUDA BH:" ... total_time= line),
+# which excludes start-up (for GPU jobs: CUDA context creation and upload).
+# `user` is host CPU time (summed over threads; for GPU jobs mostly waiting
+# on the GPU), so it is shown only as CPU cost, never as a speed measure.
 #
-# Usage: ./times.sh [log_dir]    (default: current directory)
-#
-# Logs from before main_slurm.sh recorded its config show "?" and are
-# grouped together.
+# Older logs without the "config" / "node" lines still work: the
+# configuration then comes from the program's "Done. n=... steps=...
+# output_every=..." line, and a GPU name from nvidia-smi's line in the
+# matching .out file. Anything unknown shows as "?".
 
 set -euo pipefail
 
-LOG_DIR="${1:-.}"
+prefixes=(nbody_sim nbody_cuda)
+dirs=()
+if [ "$#" -eq 1 ] && [ ! -d "$1" ]; then
+    prefixes=("$1")
+    dirs=(.)
+else
+    dirs=("$@")
+fi
+[ "${#dirs[@]}" -eq 0 ] && dirs=(.)
 
+files=()
 shopt -s nullglob
-files=("${LOG_DIR}"/nbody_sim_*.err)
+for d in "${dirs[@]}"; do
+    for p in "${prefixes[@]}"; do
+        files+=("$d"/"$p"_*.err)
+    done
+done
 shopt -u nullglob
 
-if [ ${#files[@]} -eq 0 ]; then
-    echo "No nbody_sim_*.err files found in ${LOG_DIR}" >&2
+if [ "${#files[@]}" -eq 0 ]; then
+    echo "No ${prefixes[*]} *.err logs found in: ${dirs[*]}" >&2
     exit 1
 fi
 
+# Value of key=... in a "key=value key=value" line ("" if absent).
+field() {
+    echo "$1" | grep -oP "(^|\s)$2=\K[^ ]+" || true
+}
+
 for file in "${files[@]}"; do
-    job_id=$(basename "$file" .err | sed -E 's/^nbody_sim_//')
     real=$(grep -m1 '^real' "$file" | awk '{print $2}' || true)
     user=$(grep -m1 '^user' "$file" | awk '{print $2}' || true)
     sys=$(grep -m1 '^sys' "$file" | awk '{print $2}' || true)
@@ -39,52 +64,83 @@ for file in "${files[@]}"; do
         continue
     fi
 
+    job_id=$(basename "$file" .err)
+    job_id=${job_id##*_}
     config=$(grep -m1 '^config ' "$file" || true)
-    threads=$(echo "$config" | grep -oP 'threads=\K[0-9]+' || echo "?")
-    n=$(echo "$config" | grep -oP 'n_bodies=\K[0-9]+' || echo "?")
-    steps=$(echo "$config" | grep -oP 'steps=\K[0-9]+' || echo "?")
-    every=$(echo "$config" | grep -oP 'output_every=\K[0-9]+' || echo "?")
-    node=$(grep -m1 '^node ' "$file" | awk '{print $2}' || true)
-    loop_ms=$(grep -m1 -oP '^BH: .*total_time=\K[0-9.e+-]+' "$file" || true)
+    done_line=$(grep -m1 '^Done\. ' "$file" || true)
+    timing=$(grep -m1 -E '^(CUDA )?BH: ' "$file" || true)
+    node_line=$(grep -m1 '^node ' "$file" || true)
 
-    printf '%s\t%s\t%s/%s/%s\t%s\t%s\t%s\t%s\t%s\n' \
-        "$job_id" "$threads" "$n" "$steps" "$every" "$real" "$user" "$sys" \
-        "${node:-?}" "${loop_ms:--}"
+    n=$(field "$config" n_bodies)
+    [ -z "$n" ] && n=$(field "$done_line" n)
+    steps=$(field "$config" steps)
+    [ -z "$steps" ] && steps=$(field "$done_line" steps)
+    every=$(field "$config" output_every)
+    [ -z "$every" ] && every=$(field "$done_line" output_every)
+
+    if [[ "$timing" == CUDA* || "$config" == *device=gpu* ]]; then
+        kind=GPU
+    else
+        threads=$(field "$config" threads)
+        [ -z "$threads" ] && threads=$(field "$timing" threads)
+        kind="CPU-${threads:-?}"
+    fi
+
+    node=$(echo "$node_line" | awk '{print $2}')
+    device=$(echo "$node_line" | grep -oP '(gpu|cpu)="\K[^"]*' || true)
+    if [ -z "$device" ] && [ "$kind" = GPU ] && [ -f "${file%.err}.out" ]; then
+        device=$(grep -m1 -oP '^NVIDIA [^,]+' "${file%.err}.out" || true)
+    fi
+    loop_ms=$(field "$timing" total_time)
+
+    printf '%s\t%s\t%s\t%s\t%s/%s/%s\t%s\t%s\t%s\t%s\n' \
+        "$job_id" "$kind" "${node:-?}" "${device:-?}" \
+        "${n:-?}" "${steps:-?}" "${every:-?}" \
+        "$real" "$user" "$sys" "${loop_ms:--}"
 done | awk -F'\t' '
+    # Convert bash `time` output (e.g. 1m3.537s) to seconds.
+    function secs(t,    parts) {
+        split(t, parts, /[ms]/)
+        return parts[1] * 60 + parts[2]
+    }
     # "?" (unknown) sorts after every number.
     function num(v) { return (v == "?" || v == "") ? 1e18 : v + 0 }
+    # Sort rank of a kind: CPU by thread count, then GPU, then unknown.
+    function kindRank(k,    t) {
+        if (k == "GPU") return 1e9
+        t = substr(k, 5)
+        return (t == "?" || t == "") ? 1e12 : t + 0
+    }
     # Does group key x sort after group key y?
     function groupAfter(x, y,    a, b, ca, cb, i) {
         split(x, a, SUBSEP); split(y, b, SUBSEP)
         split(a[1], ca, "/"); split(b[1], cb, "/")
         for (i = 1; i <= 3; i++)
             if (num(ca[i]) != num(cb[i])) return num(ca[i]) > num(cb[i])
-        return num(a[2]) > num(b[2])
+        return kindRank(a[2]) > kindRank(b[2])
     }
-    # Convert bash `time` output (e.g. 1m3.537s) to seconds.
-    function secs(t,    parts) {
-        split(t, parts, /[ms]/)
-        return parts[1] * 60 + parts[2]
+    function shorten(s, width) {
+        return length(s) > width ? substr(s, 1, width - 1) "~" : s
     }
     {
-        job[NR] = $1; thr[NR] = $2; cfg[NR] = $3
-        real[NR] = secs($4); user[NR] = secs($5); sys[NR] = secs($6)
-        node[NR] = $7; loop[NR] = ($8 == "-") ? "-" : sprintf("%.3f", $8 / 1000)
-        key = $3 SUBSEP $2
+        job[NR] = $1; kind[NR] = $2; node[NR] = $3; dev[NR] = $4; cfg[NR] = $5
+        real[NR] = secs($6); user[NR] = secs($7)
+        loop[NR] = ($9 == "-") ? "-" : sprintf("%.3f", $9 / 1000)
+        key = $5 SUBSEP $2
         if (!(key in count)) { order[++groups] = key }
         count[key]++; sum[key] += real[NR]
-        # Distinct nodes per group: mixing node types makes timings noisy.
-        if (!((key, $7) in seenNode)) { seenNode[key, $7] = 1; nodes[key] = nodes[key] (nodes[key] == "" ? "" : ",") $7 }
+        if ($9 != "-") { loopCount[key]++; loopSum[key] += $9 / 1000 }
+        # Distinct nodes per group: mixing hardware makes timings noisy.
+        if (!((key, $3) in seen)) { seen[key, $3] = 1; nodes[key] = nodes[key] (nodes[key] == "" ? "" : ",") $3 }
     }
     END {
         if (NR == 0) { print "No completed jobs with timing information found."; exit 1 }
 
-        printf "%-10s %-8s %-10s %-22s %-10s %-10s %-12s %-8s\n", "Job ID", "Threads", "Node", "Bodies/Steps/OutEvery", "Real (s)", "Loop (s)", "CPU user (s)", "Sys (s)"
-        print "------------------------------------------------------------------------------------------------"
+        printf "%-9s %-7s %-9s %-24s %-22s %-9s %-9s %-9s\n", "Job ID", "Kind", "Node", "Device", "Bodies/Steps/OutEvery", "Real (s)", "Loop (s)", "CPU user"
+        print "-----------------------------------------------------------------------------------------------------------"
         for (i = 1; i <= NR; i++)
-            printf "%-10s %-8s %-10s %-22s %-10.3f %-10s %-12.3f %-8.3f\n", job[i], thr[i], node[i], cfg[i], real[i], loop[i], user[i], sys[i]
+            printf "%-9s %-7s %-9s %-24s %-22s %-9.3f %-9s %-9.3f\n", job[i], kind[i], node[i], shorten(dev[i], 24), cfg[i], real[i], loop[i], user[i]
 
-        # Sort groups numerically by bodies, steps, output_every, then threads.
         for (i = 2; i <= groups; i++) {
             k = order[i]
             for (j = i - 1; j >= 1; j--) {
@@ -95,23 +151,25 @@ done | awk -F'\t' '
         }
 
         print ""
-        printf "%-22s %-8s %-6s %-14s %-9s %-11s %s\n", "Bodies/Steps/OutEvery", "Threads", "Jobs", "Avg real (s)", "Speedup", "Efficiency", "Nodes"
-        print "------------------------------------------------------------------------------------------"
+        printf "%-22s %-7s %-5s %-13s %-13s %-17s %-11s %s\n", "Bodies/Steps/OutEvery", "Kind", "Jobs", "Avg real (s)", "Avg loop (s)", "Speedup vs CPU-1", "Efficiency", "Nodes"
+        print "-------------------------------------------------------------------------------------------------------------"
         for (i = 1; i <= groups; i++) {
             split(order[i], p, SUBSEP)
             avg = sum[order[i]] / count[order[i]]
-            base = p[1] SUBSEP "1"
+            avgLoop = (order[i] in loopCount) ? sprintf("%.3f", loopSum[order[i]] / loopCount[order[i]]) : "-"
+            base = p[1] SUBSEP "CPU-1"
             speedup = "-"; eff = "-"
             if (base in count) {
                 s = (sum[base] / count[base]) / avg
                 speedup = sprintf("%.2fx", s)
-                if (p[2] != "?" && p[2] > 0) eff = sprintf("%.0f%%", 100 * s / p[2])
+                t = substr(p[2], 5)
+                if (p[2] != "GPU" && t != "?" && t + 0 > 0) eff = sprintf("%.0f%%", 100 * s / t)
             }
-            printf "%-22s %-8s %-6d %-14.3f %-9s %-11s %s\n", p[1], p[2], count[order[i]], avg, speedup, eff, nodes[order[i]]
+            printf "%-22s %-7s %-5d %-13.3f %-13s %-17s %-11s %s\n", p[1], p[2], count[order[i]], avg, avgLoop, speedup, eff, nodes[order[i]]
         }
         print ""
         print "Completed jobs: " NR
-        print "Speedup = 1-thread avg real / this avg real, same configuration (\"-\" if no 1-thread runs)."
-        print "Efficiency = speedup / threads. CPU user time is summed over threads: not a speed measure."
-        print "If a group lists several nodes (or differs from its 1-thread group), node differences add noise."
+        print "Speedup = CPU-1 (serial) avg real / this avg real, same configuration (\"-\" if no serial runs)."
+        print "Efficiency (CPU only) = speedup / threads. GPU real includes CUDA start-up; Loop excludes it."
+        print "CPU user is host CPU time summed over threads: not a speed measure."
     }'
