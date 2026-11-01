@@ -6,6 +6,9 @@
 #include <fstream>
 #include <iostream>
 #include <string>
+#ifdef _OPENMP
+#include <omp.h>
+#endif
 
 // Output file layout (all little-endian, native float32/uint32).
 // Format version "NBS2" — breaking change from the original 6-float/body
@@ -49,9 +52,16 @@
 // output_every is still required on the command line but is then unused.
 
 namespace {
-void sortById(std::vector<Body> &bodies) {
-  std::sort(bodies.begin(), bodies.end(),
-            [](const Body &a, const Body &b) { return a.id < b.id; });
+// Restores id order (index i holds Body::id == i). uniformDisc() assigns
+// ids exactly 0..n-1, so this is an O(n) parallel scatter instead of a
+// sort, with the same result as sorting by id.
+void sortById(std::vector<Body> &bodies, std::vector<Body> &scratch) {
+  scratch = bodies;
+  const std::size_t n = bodies.size();
+#pragma omp parallel for schedule(static)
+  for (std::size_t i = 0; i < n; ++i) {
+    bodies[scratch[i].id] = scratch[i];
+  }
 }
 } // namespace
 
@@ -111,7 +121,8 @@ int main(int argc, char **argv) {
   // even frame 0's array order isn't id order — sort before this first
   // write too, or the mass/radius arrays wouldn't line up with id 0..n-1.
   // (Done without output too, so both modes start from the same order.)
-  sortById(sim.bodies);
+  std::vector<Body> sortScratch;
+  sortById(sim.bodies, sortScratch);
 
   // mass and radius never change after construction (collide()/iterate()
   // only touch pos/vel/acc), so write them once instead of every frame.
@@ -124,11 +135,22 @@ int main(int argc, char **argv) {
     }
   }
 
+  // Fill the whole frame in parallel, then write it with one call instead
+  // of one small write per body.
+  std::vector<float> frameBuffer(
+      writeOutput ? static_cast<std::size_t>(nBodies) * 4 : 0);
   auto writeFrame = [&]() {
-    for (const Body &body : sim.bodies) {
-      float record[4] = {body.pos.x, body.pos.y, body.vel.x, body.vel.y};
-      out.write(reinterpret_cast<const char *>(record), sizeof(record));
+#pragma omp parallel for schedule(static)
+    for (std::size_t i = 0; i < nBodies; ++i) {
+      const Body &body = sim.bodies[i];
+      float *record = &frameBuffer[i * 4];
+      record[0] = body.pos.x;
+      record[1] = body.pos.y;
+      record[2] = body.vel.x;
+      record[3] = body.vel.y;
     }
+    out.write(reinterpret_cast<const char *>(frameBuffer.data()),
+              static_cast<std::streamsize>(frameBuffer.size() * sizeof(float)));
   };
 
   auto markFrameComplete = [&]() {
@@ -145,29 +167,30 @@ int main(int argc, char **argv) {
     markFrameComplete();
   }
 
-  // Timed: the whole step loop (total_time), and within it only the
-  // sim.step() calls (compute_time), so frame output (the id sort and the
-  // file writes) can be separated out as output_time.
-  using Clock = std::chrono::steady_clock;
+  // Wall time of the step loop (including output frames), excluding process
+  // start-up and setup. Use this or `real`, not `user`, to compare runs:
+  // user time is CPU time summed over all threads. compute_time is the wall
+  // time of the sim.step() calls alone, so frame output (the id sort and
+  // the file writes) can be separated out as output_time.
   double computeMs = 0.0;
-  const auto loopStart = Clock::now();
+  const auto loopStart = std::chrono::steady_clock::now();
 
   for (std::uint32_t step = 1; step <= totalSteps; ++step) {
-    const auto stepStart = Clock::now();
+    const auto stepStart = std::chrono::steady_clock::now();
     sim.step(); // attract() -> quadtree.build() reorders sim.bodies
-    computeMs += std::chrono::duration<double, std::milli>(Clock::now() -
-                                                           stepStart)
+    computeMs += std::chrono::duration<double, std::milli>(
+                     std::chrono::steady_clock::now() - stepStart)
                      .count();
     if (writeOutput && step % outputEvery == 0) {
-      sortById(sim.bodies); // restore id order before this frame's write
+      sortById(sim.bodies, sortScratch); // restore id order before this frame's write
       writeFrame();
       markFrameComplete();
     }
   }
 
-  const double loopMs =
-      std::chrono::duration<double, std::milli>(Clock::now() - loopStart)
-          .count();
+  const double loopMs = std::chrono::duration<double, std::milli>(
+                            std::chrono::steady_clock::now() - loopStart)
+                            .count();
 
   if (writeOutput) {
     out.close();
@@ -182,7 +205,12 @@ int main(int argc, char **argv) {
             << " frames_written=" << completedFrames << " (expected "
             << (writeOutput ? numFrames : 0) << ") -> "
             << (writeOutput ? outputPath : "(no output)") << "\n";
-  std::cerr << "BH: n=" << nBodies << " threads=1"
+#ifdef _OPENMP
+  const int threads = omp_get_max_threads();
+#else
+  const int threads = 1;
+#endif
+  std::cerr << "BH: n=" << nBodies << " threads=" << threads
             << " steps=" << totalSteps << " total_time=" << loopMs << " ms"
             << " avg_step=" << (totalSteps ? loopMs / totalSteps : 0.0)
             << " ms compute_time=" << computeMs << " ms"

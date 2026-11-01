@@ -42,6 +42,8 @@ struct Node {
     std::size_t bodyStart = 0;
     std::size_t bodyEnd = 0;
 
+    Node() = default;
+
     inline Node(int next,
                 const Quad &quad,
                 std::size_t bodyStart,
@@ -84,9 +86,16 @@ public:
 
 private:
     void subdivide(int node,
+                   int children,
                    std::vector<Body> &bodies,
                    std::size_t start,
                    std::size_t end);
+
+    void accumulateLeaf(int node, const std::vector<Body> &bodies);
+
+    // Subdivides `node` into the 4 slots at `children`, or makes it a leaf
+    // when `children` is 0.
+    void processNode(int node, int children, std::vector<Body> &bodies);
 
     void propagate();
 
@@ -95,4 +104,5 @@ private:
     std::size_t leafCapacity;
     std::vector<Node> nodes;
     std::vector<int> parents;
+    std::vector<int> childSlot; // per-level scratch for build()
 };

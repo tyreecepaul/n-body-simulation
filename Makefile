@@ -1,5 +1,5 @@
 CXX := g++
-CXXFLAGS := -std=c++17 -march=native -Wall -Wextra -Ofast -ffast-math
+CXXFLAGS := -std=c++17 -march=native -Wall -Wextra -Ofast -ffast-math -fopenmp
 SRC_DIR := src
 BUILD_DIR := build
 TARGET := sim

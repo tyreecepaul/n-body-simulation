@@ -11,7 +11,7 @@ if [ "$#" -lt 1 ]; then
     echo "Usage: $0 <number_of_runs> [visual] [sbatch options...]"
     echo "  e.g. $0 3                 # timing runs, no output file"
     echo "       $0 1 visual          # also write the .bin for run.py"
-    echo "       $0 3 --partition=cosc3500"
+    echo "       $0 3 --cpus-per-task=8"
     exit 1
 fi
 
