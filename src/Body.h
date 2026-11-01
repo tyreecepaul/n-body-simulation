@@ -8,11 +8,9 @@ struct Body {
   Vec2 acc;
   float mass;
   float radius;
-  std::uint32_t id; // NEW — stable identity, since QuadTree::build() now
-                     // reorders `Simulation::bodies` in place every frame
-                     // (see partition-based build), so array position is
-                     // no longer a valid way to track "the same body"
-                     // across frames/output.
+  // Stable identity: QuadTree::build() reorders the body array in place
+  // every step, so array position doesn't identify a body across frames.
+  std::uint32_t id;
 
   Body(const Vec2 &pos, const Vec2 &vel, float mass, float radius,
        std::uint32_t id = 0)

@@ -7,10 +7,9 @@
 # against the serial (CPU-1) runs of the same configuration.
 #
 # Usage:
-#   ./times.sh                 # logs in the current directory
-#   ./times.sh DIR [DIR ...]   # combine directories, e.g. the CUDA and CPU
-#                              # checkouts: ./times.sh . ../n-body-simulation
-#   ./times.sh nbody_cuda      # only logs with this prefix (current directory)
+#   cluster/times.sh                 # logs in the current directory (project root)
+#   cluster/times.sh DIR [DIR ...]   # combine log directories
+#   cluster/times.sh nbody_cuda      # only logs with this prefix (current directory)
 #
 # Speed is wall time: `real` from bash's `time`, and the program's own step
 # loop time ("Loop", from its "BH:" / "CUDA BH:" ... total_time= line),

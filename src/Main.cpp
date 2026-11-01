@@ -11,12 +11,9 @@
 #endif
 
 // Output file layout (all little-endian, native float32/uint32).
-// Format version "NBS2" — breaking change from the original 6-float/body
-// layout: mass and radius are invariant over the run, so they're now
-// written once instead of once per frame, and a live completed_frames
-// counter is kept in the header so a crashed/killed run still produces a
-// file that can be read (truncated) instead of one that fails the loader's
-// size check entirely.
+// Format "NBS2": mass and radius are invariant over the run, so they're
+// written once rather than per frame, and a live completed_frames counter
+// in the header lets a crashed or killed run still be read (truncated).
 //
 //   Header (28 bytes):
 //     char[4]  magic = "NBS2"

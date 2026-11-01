@@ -171,7 +171,7 @@ void QuadTree::build(std::vector<Body> &bodies) {
     std::size_t levelBegin = 0;
     std::size_t levelEnd = 0;
     std::ptrdiff_t levelSize = 0;
-    std::ptrdiff_t chunk = 1;
+    [[maybe_unused]] std::ptrdiff_t chunk = 1; // used only by schedule()
 
 #pragma omp parallel
     {

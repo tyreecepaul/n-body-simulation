@@ -15,13 +15,13 @@ int main(int argc, char **argv) {
 
   NaiveSimulation sim(nBodies);
 
-  auto start = std::chrono::high_resolution_clock::now();
+  auto start = std::chrono::steady_clock::now();
 
   for (std::uint32_t step = 0; step < totalSteps; ++step) {
     sim.step();
   }
 
-  auto end = std::chrono::high_resolution_clock::now();
+  auto end = std::chrono::steady_clock::now();
   double elapsedMs =
       std::chrono::duration<double, std::milli>(end - start).count();
 

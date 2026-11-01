@@ -1,11 +1,23 @@
-__pycache__/
+# Build output
 build/
-sim_output/
-.vscode/
-.venv/
-CLAUDE.md
+build_serial/
 build_cuda*/
 bin_cuda*/
-cuda_check
+sim
+sim_serial
+naive_sim
 sim_cuda
 naive_sim_cuda
+cuda_check
+
+# Simulation output and Slurm job logs
+sim_output/
+nbody_*.out
+nbody_*.err
+gmon.out
+
+# Python / editor
+__pycache__/
+.venv/
+.vscode/
+CLAUDE.md

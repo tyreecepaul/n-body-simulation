@@ -1,4 +1,7 @@
 #!/bin/bash
+# CUDA benchmark job. Written for UQ's Rangpur cluster: change
+# --account / --partition (and the CUDA module) for another Slurm cluster.
+# Submit from the project root: cluster/run.sh N cuda, or sbatch cluster/main_slurm_cuda.sh.
 #SBATCH --job-name=nbody_cuda
 #SBATCH --output=%x_%j.out
 #SBATCH --error=%x_%j.err
@@ -51,7 +54,7 @@ N_BODIES=10000
 TOTAL_STEPS=1000
 OUTPUT_EVERY=2
 # Default: computation only, no .bin file (OUTPUT_EVERY is then unused and
-# logged as "none"). Pass "visual" (./run.sh N visual, or sbatch <this
+# logged as "none"). Pass "visual" (cluster/run.sh N cuda visual, or sbatch <this
 # script> visual) to also write the trajectory .bin every OUTPUT_EVERY
 # steps, for run.py.
 VISUAL=0
